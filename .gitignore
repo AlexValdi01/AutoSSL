@@ -3,4 +3,4 @@ __pycache__/
 *.pyc
 
 # Ignore real configuration files
-agent_details.json
+agent-details.json
