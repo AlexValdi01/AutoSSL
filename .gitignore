@@ -1,0 +1,6 @@
+# Ignore Python directories
+__pycache__/
+*.pyc
+
+# Ignore real configuration files
+agent_details.json

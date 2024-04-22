@@ -1,0 +1,6 @@
+{
+    "backend_url": "http://localhost:8000/servers/information",
+    "rabbitmq_host": "localhost",
+    "rabbitmq_port": 5672,
+    "rabbitmq_vhost": "/"
+}

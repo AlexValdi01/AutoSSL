@@ -1,0 +1,7 @@
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VybmFtZSI6IlZhbGRpdmlhMjciLCJhZ2VudF9pZCI6ImQ4NTJhYzI1LTg1MTYtNDJiZi05YmIwLTU4ZjRjY2E2MDA3OCIsImlhdCI6MTcxMzM3MjQxN30.TNV41pKRxGmIvEEZnQtxkg09_ikezH0_qvkfDUgATA0",
+  "agent_id": "d852ac25-8516-42bf-9bb0-58f4cca60078",
+  "rabbitmq_username": "agent_d852ac25-8516-42bf-9bb0-58f4cca60078",
+  "rabbitmq_password": "PHT-IUvvxfFiFw6dnVFMXQ",
+  "queue_name": "queue_d852ac25-8516-42bf-9bb0-58f4cca60078"
+}
