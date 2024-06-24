@@ -125,51 +125,69 @@ def find_apache_domains_and_ports(directory):
     domain_pattern = re.compile(r'\bServerName\b\s+(\S+)')
     listen_pattern = re.compile(r'<VirtualHost\s+\*:(\d+)>')
     cert_path_pattern = re.compile(r'SSLCertificateFile\s+([^\s;]+)')
-
     result = {}
-
     for filename in os.listdir(directory):
         file_path = os.path.join(directory, filename)
-
         if os.path.isfile(file_path):
             with open(file_path, 'r') as file:
                 content = file.read()
                 domains = domain_pattern.findall(content)
                 ports = set(int(port) for port in listen_pattern.findall(content))
                 cert_paths = cert_path_pattern.findall(content)
-
                 for domain in domains:
                     status = is_domain_active(domain, ports)
-                    result.setdefault(domain, {"files": set(), "ports": set(), "web_server": "Apache", "status": status, "cert_paths": set()}).get("files").add(filename)
+                    result.setdefault(domain, {"files": set(), "ports": set(), 
+                                               "web_server": "Apache", "status": status, 
+                                               "cert_paths": set()}).get("files").add(filename)
                     result[domain]["ports"].update(ports)
                     result[domain]["cert_paths"].update(cert_paths)
-
     return result
 
 def find_nginx_domains_and_ports(directory):
     domain_pattern = re.compile(r'\bserver_name\b\s+([^;]+);')
     listen_pattern = re.compile(r'\blisten\b\s+(\d+)')
     cert_path_pattern = re.compile(r'ssl_certificate\s+([^\s;]+)')
-
     result = {}
-
     for filename in os.listdir(directory):
         file_path = os.path.join(directory, filename)
-
         if os.path.isfile(file_path):
             with open(file_path, 'r') as file:
                 content = file.read()
                 domains = domain_pattern.findall(content)
                 ports = set(int(port) for port in listen_pattern.findall(content))
                 cert_paths = cert_path_pattern.findall(content)
-
                 for domain in domains:
                     status = is_domain_active(domain, ports)
-                    result.setdefault(domain, {"files": set(), "ports": set(), "web_server": "Nginx", "status": status, "cert_paths": set()}).get("files").add(filename)
+                    result.setdefault(domain, {"files": set(), "ports": set(), 
+                                               "web_server": "Nginx", "status": status, 
+                                               "cert_paths": set()}).get("files").add(filename)
                     result[domain]["ports"].update(ports)
                     result[domain]["cert_paths"].update(cert_paths)
-
     return result
+
+def find_apache_cert_paths(domain):
+    cert_path_pattern = re.compile(r'SSLCertificateFile\s+([^\s;]+)')
+    cert_paths = set()
+    for filename in os.listdir(APACHE_DIRECTORY):
+        file_path = os.path.join(APACHE_DIRECTORY, filename)
+        if os.path.isfile(file_path):
+            with open(file_path, 'r') as file:
+                content = file.read()
+                if domain in content:
+                    cert_paths.update(cert_path_pattern.findall(content))
+    return list(cert_paths)
+
+def find_nginx_cert_paths(domain):
+    cert_path_pattern = re.compile(r'ssl_certificate\s+([^\s;]+)')
+    cert_paths = set()
+    for filename in os.listdir(NGINX_DIRECTORY):
+        file_path = os.path.join(NGINX_DIRECTORY, filename)
+        if os.path.isfile(file_path):
+            with open(file_path, 'r') as file:
+                content = file.read()
+                if domain in content:
+                    cert_paths.update(cert_path_pattern.findall(content))
+    return list(cert_paths)
 
 def detect_web_server(domain):
     # Check the configuration files, skipping domain extensions
@@ -305,8 +323,12 @@ def manage_web_servers(target_service):
         print(f"Error managing web servers: {e}")
 
 def connect_to_rabbitmq():
-    credentials = pika.PlainCredentials(detail["rabbitmq_username"], detail["rabbitmq_password"])
-    parameters = pika.ConnectionParameters(host=config["rabbitmq_host"], port=int(config["rabbitmq_port"]), virtual_host=config["rabbitmq_vhost"], credentials=credentials)
+    credentials = pika.PlainCredentials(detail["rabbitmq_username"], 
+                                        detail["rabbitmq_password"])
+    parameters = pika.ConnectionParameters(host=config["rabbitmq_host"], 
+                                           port=int(config["rabbitmq_port"]), 
+                                           virtual_host=config["rabbitmq_vhost"], 
+                                           credentials=credentials)
     connection = pika.BlockingConnection(parameters)
     channel = connection.channel()
     return connection, channel
@@ -326,6 +348,24 @@ def check_and_process_messages():
         channel.stop_consuming()
     connection.close()
 
+def send_heartbeat():
+    heartbeat_url = f"{config['backend_url']}/agents/heartbeat"
+    headers = {"Authorization": f"Bearer {token}"}
+    data = {
+        'agent_id': detail["agent_id"],
+        'timestamp': datetime.utcnow().isoformat()
+    }
+    response = requests.post(heartbeat_url, headers=headers, data=json.dumps(data))
+    if response.status_code == 200:
+        print("Heartbeat sent successfully.")
+    else:
+        print("Failed to send heartbeat.", response.text)
+
+def start_heartbeat_interval(interval=60):
+    while True:
+        send_heartbeat()
+        time.sleep(interval)
+
 def process_message(message):
     domain = message.get("domain")
     action = message.get("action", "renew")
@@ -342,75 +382,99 @@ def handle_renewal(message):
     file_content = base64.b64decode(file_content_base64)
     temp_zip_path = f"/tmp/{domain}.zip"
 
-    # Base path where certificates are stored
-    base_cert_directory = "/etc/autossl/"
-    cert_directory = os.path.join(base_cert_directory, domain)
-
-    # Check if the directory for the domain already exists, if not, create it
-    if not os.path.exists(cert_directory):
-        os.makedirs(cert_directory, exist_ok=True)
-        print(f"Directorio creado para el nuevo certificado de {domain}: {cert_directory}")
-
-    # Path of the backup directory
-    backup_directory = os.path.join(cert_directory, "backup", datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
-
-    # Save the . zip temporarily
+    # Save the .zip file temporarily
     with open(temp_zip_path, "wb") as temp_zip_file:
         temp_zip_file.write(file_content)
 
-    # Unzip the file. zip
+    # Unzip the file
     with zipfile.ZipFile(temp_zip_path, 'r') as zip_ref:
-        # If it’s the first time, just extract the files
-        if not os.listdir(cert_directory):  # The directory is empty
-            zip_ref.extractall(cert_directory)
-        else:
-            # Create the backup directory
-            os.makedirs(backup_directory, exist_ok=True)
-            
-            # Moves current files to the backup directory
-            for filename in os.listdir(cert_directory):
-                if filename.endswith(".key") or filename.endswith(".crt"):
-                    shutil.move(os.path.join(cert_directory, filename), os.path.join(backup_directory, filename))
+        zip_ref.extractall(f"/tmp/{domain}")
 
-            # Extract new files from zip
-            zip_ref.extractall(cert_directory)
-
-    # Cleans up the temporary .zip file
-    os.remove(temp_zip_path)
-
+    # Get the web server configured for the domain
     web_server = detect_web_server(domain.split('.')[0])
+    if not web_server:
+        print("No web server configuration found for the domain.")
+        return
+
+    # Get the certificate paths from the configuration file
+    cert_paths = []
+    if web_server == "apache":
+        cert_paths = find_apache_cert_paths(domain)
+    elif web_server == "nginx":
+        cert_paths = find_nginx_cert_paths(domain)
+
+    if not cert_paths:
+        print(f"No certificate paths found in the configuration for {domain}.")
+        return
+
+    # Update the certificates in their original locations
+    for cert_path in cert_paths:
+        cert_directory = os.path.dirname(cert_path)
+        backup_directory = os.path.join(cert_directory, "backup", datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
+
+        # Create the backup directory
+        os.makedirs(backup_directory, exist_ok=True)
+
+        # Move current files to the backup directory
+        for filename in os.listdir(cert_directory):
+            if filename.endswith(".key") or filename.endswith(".crt"):
+                shutil.move(os.path.join(cert_directory, filename), os.path.join(backup_directory, filename))
+
+        # Copy new files from /tmp/{domain} to the original directory
+        for filename in os.listdir(f"/tmp/{domain}"):
+            if filename.endswith(".key") or filename.endswith(".crt"):
+                shutil.copy(os.path.join(f"/tmp/{domain}", filename), cert_directory)
+
+    # Clean up the temporary .zip file and the temporary directory
+    os.remove(temp_zip_path)
+    shutil.rmtree(f"/tmp/{domain}")
+
     if web_server:
         manage_web_servers(web_server)
         print(f"Certificate renewed and {web_server.capitalize()} successfully restarted for domain {domain}.")
-    else:
-        print("No web server configuration found for the domain.")
 
 def handle_rollback(domain):
-    base_cert_directory = "/etc/autossl/"
-    cert_directory = os.path.join(base_cert_directory, domain)
-    backup_directory = os.path.join(cert_directory, "backup")
-
     try:
-        # Ensure there are backups available
-        backup_folders = [d for d in os.listdir(backup_directory) if os.path.isdir(os.path.join(backup_directory, d))]
-        if not backup_folders:
-            print(f"No backups found for domain {domain}. Rollback aborted.")
+        # Get the web server configured for the domain
+        web_server = detect_web_server(domain.split('.')[0])
+        if not web_server:
+            print("No web server configuration found for the domain.")
             return
 
-        # Find the latest backup folder
-        latest_backup = max([os.path.join(backup_directory, d) for d in backup_folders], key=os.path.getmtime)
+        # Get the certificate paths from the configuration file
+        cert_paths = []
+        if web_server == "apache":
+            cert_paths = find_apache_cert_paths(domain)
+        elif web_server == "nginx":
+            cert_paths = find_nginx_cert_paths(domain)
 
-        # Remove current certificate files safely
-        current_files = [f for f in os.listdir(cert_directory) if os.path.isfile(os.path.join(cert_directory, f))]
-        for filename in current_files:
-            os.remove(os.path.join(cert_directory, filename))
+        if not cert_paths:
+            print(f"No certificate paths found in the configuration for {domain}.")
+            return
 
-        # Copy files from the latest backup to the certificate directory
-        backup_files = [f for f in os.listdir(latest_backup) if os.path.isfile(os.path.join(latest_backup, f))]
-        for filename in backup_files:
-            shutil.copy(os.path.join(latest_backup, filename), cert_directory)
+        for cert_path in cert_paths:
+            cert_directory = os.path.dirname(cert_path)
+            backup_directory = os.path.join(cert_directory, "backup")
 
-        web_server = detect_web_server(domain.split('.')[0])
+            # Ensure there are backups available
+            backup_folders = [d for d in os.listdir(backup_directory) if os.path.isdir(os.path.join(backup_directory, d))]
+            if not backup_folders:
+                print(f"No backups found for domain {domain}. Rollback aborted.")
+                return
+
+            # Find the latest backup folder
+            latest_backup = max([os.path.join(backup_directory, d) for d in backup_folders], key=os.path.getmtime)
+
+            # Remove current certificate files safely
+            current_files = [f for f in os.listdir(cert_directory) if os.path.isfile(os.path.join(cert_directory, f))]
+            for filename in current_files:
+                os.remove(os.path.join(cert_directory, filename))
+
+            # Copy files from the latest backup to the certificate directory
+            backup_files = [f for f in os.listdir(latest_backup) if os.path.isfile(os.path.join(latest_backup, f))]
+            for filename in backup_files:
+                shutil.copy(os.path.join(latest_backup, filename), cert_directory)
+
         if web_server:
             manage_web_servers(web_server)
             print(f"Rollback successful and {web_server.capitalize()} restarted for domain {domain}.")
@@ -426,8 +490,12 @@ def main():
     # Thread to send server data every 30 minutes
     thred_send_data = threading.Thread(target=send_data_periodically)
 
+    # Thread to indicate that the agent is active to the backend
+    thread_heartbeat = threading.Thread(target=start_heartbeat_interval)
+
     thread_rabbitmq.start()
     thred_send_data.start()
+    thread_heartbeat.start()
     
     thread_rabbitmq.join()
     thred_send_data.join()
