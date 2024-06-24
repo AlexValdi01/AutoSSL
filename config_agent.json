@@ -1,5 +1,5 @@
 {
-    "backend_url": "http://localhost:8000/servers/information",
+    "backend_url": "https://autossl.ddns.net/api/servers/information",
     "rabbitmq_host": "localhost",
     "rabbitmq_port": 5672,
     "rabbitmq_vhost": "/"
